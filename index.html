@@ -528,12 +528,20 @@
                     // 名前登録時に一度Firestoreへ空の状態などを送っても良いが、
                     // チェックを入れたタイミングで送られるのでここではローカル保存のみ
                 },
-                resetName() {
-                    if (confirm('名前を選び直しますか？\n※現在のチェック状況は保持されません')) {
-                        // サーバーの自分のデータを消してもいいが、複雑になるので
-                        // ローカルリセットのみを行う
-                        localStorage.removeItem('my_name');
-                        localStorage.removeItem('app_session_uuid');
+                async resetName() {
+                    if (confirm('名前を選び直しますか？\n※現在のチェック状況は消去されます')) {
+                        // サーバー上の自分のデータを削除
+                        if (this.currentBatchId && this.sessionId) {
+                            try {
+                                const docRef = db.collection('sessions').doc(this.currentBatchId);
+                                // Firestoreの特定のフィールド（session_id）を削除するコマンド
+                                await docRef.update({
+                                    [this.sessionId]: firebase.firestore.FieldValue.delete()
+                                });
+                            } catch (e) { console.error(e); }
+                        }
+                        // ローカルの情報を消してリロード
+                        localStorage.clear();
                         location.reload();
                     }
                 },
@@ -546,20 +554,33 @@
                     const rows = this.remoteChecks[this.sessionId].rows;
                     return Array.isArray(rows) && rows.includes(index);
                 },
+                // 同じ名前の人が複数いても「一番進んでいる位置」だけを表示する
                 getMembersAtRow(rankNumber) {
-                    // rankNumber (1-20) のindex (0-19)
                     const targetIndex = rankNumber - 1;
-                    const members = [];
+                    
+                    // 1. 名前ごとの最大進捗を集計するマップを作成
+                    // 例: { "ゲスト": 5, "るいか": 10 }
+                    const nameMaxMap = {}; 
                     
                     Object.values(this.remoteChecks).forEach(userRecord => {
-                        if (userRecord.name && Array.isArray(userRecord.rows)) {
-                            // 各ユーザーの最大進捗を取得（Python版のロジック: max_row）
+                        // データが正しく、かつ名前がある場合
+                        if (userRecord.name && Array.isArray(userRecord.rows) && userRecord.rows.length > 0) {
                             const maxRow = Math.max(...userRecord.rows);
-                            if (maxRow === targetIndex) { // Python版は index=max_row の場所に名前を表示
-                                members.push(userRecord.name);
+                            
+                            // まだ記録がない、または今の記録の方が進んでいる場合に更新
+                            if (nameMaxMap[userRecord.name] === undefined || maxRow > nameMaxMap[userRecord.name]) {
+                                nameMaxMap[userRecord.name] = maxRow;
                             }
                         }
                     });
+
+                    // 2. 「最大進捗」が「現在の行」と一致する名前だけをリストにする
+                    const members = [];
+                    for (const [name, maxRow] of Object.entries(nameMaxMap)) {
+                        if (maxRow === targetIndex) {
+                            members.push(name);
+                        }
+                    }
                     return members;
                 },
                 handleImgError(e) {
